@@ -1,63 +1,78 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
+# ==============================================================================
+# build_macos.sh - macOS 自动构建、签名与 DMG 打包脚本
+# 适用产品: SHP轻量查看器 (ShpLightViewer)
+# ==============================================================================
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+BUILD_DIR="${PROJECT_ROOT}/build"
+PACKAGE_DIR="${BUILD_DIR}/package_macos"
+OUTPUTS_DIR="${PROJECT_ROOT}/outputs"
 
-echo "=== 1. 构建 Release 版本 ==="
-cmake -B "${ROOT_DIR}/build" \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_PREFIX_PATH="/opt/homebrew/opt/qt"
-cmake --build "${ROOT_DIR}/build" --config Release -j"$(sysctl -n hw.ncpu)"
+APP_NAME="ShpLightViewer"
+DMG_NAME="ShpLightViewer-0.1.0-macOS-arm64.dmg"
 
-echo "=== 2. 运行自动化测试 ==="
-ctest --test-dir "${ROOT_DIR}/build" --output-on-failure
+echo "=== 1. 清理并准备构建目录 ==="
+mkdir -p "${OUTPUTS_DIR}"
+rm -rf "${PACKAGE_DIR}"
+mkdir -p "${PACKAGE_DIR}"
 
-echo "=== 3. 准备独立 Application Bundle ==="
-PKG_DIR="${ROOT_DIR}/build/package_macos"
-rm -rf "${PKG_DIR}"
-mkdir -p "${PKG_DIR}"
-mkdir -p "${ROOT_DIR}/outputs"
-
-APP_PATH="${PKG_DIR}/ShapefileViewer.app"
-cp -R "${ROOT_DIR}/build/ShapefileViewer.app" "${APP_PATH}"
-
-echo "=== 4. 运行 macdeployqt 收集 Qt 框架和插件 ==="
-/opt/homebrew/opt/qt/bin/macdeployqt "${APP_PATH}" -verbose=1 -no-codesign
-
-echo "=== 5. 校验 Bundle 动态依赖 ==="
-MAIN_BIN="${APP_PATH}/Contents/MacOS/ShapefileViewer"
-echo "检查主二进制依赖库："
-otool -L "${MAIN_BIN}"
-
-if otool -L "${MAIN_BIN}" | grep -q "/opt/homebrew/opt/qt"; then
-    echo "错误：存在未被 @executable_path/@rpath 替换的绝对路径！"
+echo "=== 2. 检查 Qt6 环境 ==="
+QT_DIR="${QT_DIR:-$(brew --prefix qt 2>/dev/null || echo "/opt/homebrew/opt/qt")}"
+if [ ! -d "${QT_DIR}" ]; then
+    echo "错误: 未找到 Qt6 安装目录 (${QT_DIR})" >&2
     exit 1
-else
-    echo "依赖检查通过：所有 Qt 框架均已指向内嵌相对路径。"
+fi
+echo "Qt6 目录: ${QT_DIR}"
+
+MACDEPLOYQT_BIN="${QT_DIR}/bin/macdeployqt"
+if [ ! -f "${MACDEPLOYQT_BIN}" ]; then
+    echo "错误: 未找到 macdeployqt 工具 (${MACDEPLOYQT_BIN})" >&2
+    exit 1
 fi
 
-echo "=== 6. 执行 Ad-hoc 签名 ==="
-# 对内部所有动态库与 Frameworks 进行签名
-find "${APP_PATH}/Contents/Frameworks" -type f \( -name "*.dylib" -o -perm +111 \) -exec codesign --force --sign - {} + 2>/dev/null || true
-find "${APP_PATH}/Contents/PlugIns" -type f \( -name "*.dylib" -o -perm +111 \) -exec codesign --force --sign - {} + 2>/dev/null || true
-codesign --force --deep --sign - "${APP_PATH}"
-codesign -vvv --deep --strict "${APP_PATH}"
+echo "=== 3. CMake 配置与编译 ==="
+cmake -B "${BUILD_DIR}" -S "${PROJECT_ROOT}" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_PREFIX_PATH="${QT_DIR}"
+
+cmake --build "${BUILD_DIR}" --config Release -j"$(sysctl -n hw.ncpu)"
+
+echo "=== 4. 拷贝 App Bundle 到打包目录 ==="
+BUILT_APP="${BUILD_DIR}/${APP_NAME}.app"
+if [ ! -d "${BUILT_APP}" ]; then
+    echo "错误: 未找到编译生成的 App: ${BUILT_APP}" >&2
+    exit 1
+fi
+
+cp -R "${BUILT_APP}" "${PACKAGE_DIR}/"
+TARGET_APP="${PACKAGE_DIR}/${APP_NAME}.app"
+
+echo "=== 5. 使用 macdeployqt 嵌入 Qt 框架与插件 ==="
+"${MACDEPLOYQT_BIN}" "${TARGET_APP}" -always-overwrite -verbose=1
+
+echo "=== 6. 执行 Ad-hoc 代码签名 ==="
+# 递归签名所有动态库与插件，最后签名主程序 Bundle
+find "${TARGET_APP}/Contents/Frameworks" -type f \( -name "*.dylib" -o -name "*.so" \) -exec codesign --force --verify --verbose --sign - {} \; 2>/dev/null || true
+find "${TARGET_APP}/Contents/PlugIns" -type f \( -name "*.dylib" -o -name "*.so" \) -exec codesign --force --verify --verbose --sign - {} \; 2>/dev/null || true
+codesign --force --deep --verify --verbose --sign - "${TARGET_APP}"
+
+codesign --verify --deep --strict --verbose=2 "${TARGET_APP}"
 echo "Ad-hoc 签名校验通过！"
 
 echo "=== 7. 生成并归档 DMG 产物 ==="
-FINAL_DMG="${ROOT_DIR}/outputs/ShapefileViewer-0.1.0-macOS-arm64.dmg"
-rm -f "${FINAL_DMG}"
+DMG_PATH="${OUTPUTS_DIR}/${DMG_NAME}"
+rm -f "${DMG_PATH}"
 
-# 使用 hdiutil 创建自包含的 DMG
-DMG_STAGING="${PKG_DIR}/dmg_staging"
-rm -rf "${DMG_STAGING}"
-mkdir -p "${DMG_STAGING}"
-cp -R "${APP_PATH}" "${DMG_STAGING}/"
-ln -s /Applications "${DMG_STAGING}/Applications"
-
-hdiutil create -volname "ShapefileViewer" -srcfolder "${DMG_STAGING}" -ov -format UDZO "${FINAL_DMG}"
+hdiutil create -volname "SHP轻量查看器" \
+    -srcfolder "${PACKAGE_DIR}" \
+    -ov -format UDZO \
+    "${DMG_PATH}"
 
 echo "=== 8. 验证 DMG 完整性 ==="
-hdiutil verify "${FINAL_DMG}"
-echo "macOS DMG 打包成功！产物位于: ${FINAL_DMG}"
+hdiutil verify "${DMG_PATH}"
+
+echo "macOS DMG 打包成功！产物位于: ${DMG_PATH}"

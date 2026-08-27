@@ -154,7 +154,7 @@ AttributeTableDialog::AttributeTableDialog(std::shared_ptr<Core::ShapeDataset> d
 }
 
 void AttributeTableDialog::setupUi() {
-    setWindowTitle(QStringLiteral("要素属性表 - %1").arg(m_dataset ? m_dataset->filePath : QString()));
+    setWindowTitle(QStringLiteral("SHP轻量查看器 - 要素属性表"));
     resize(960, 560);
 
     auto mainLayout = new QVBoxLayout(this);

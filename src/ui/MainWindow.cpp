@@ -27,7 +27,7 @@ MainWindow::MainWindow(QWidget* parent)
 }
 
 void MainWindow::setupUi() {
-    setWindowTitle(QStringLiteral("Shapefile 查看器 (ShapefileViewer) 0.1.0"));
+    setWindowTitle(QStringLiteral("SHP轻量查看器 (ShpLightViewer) 0.1.0"));
     resize(1080, 720);
 
     setupToolbar();

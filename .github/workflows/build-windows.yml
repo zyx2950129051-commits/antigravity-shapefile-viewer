@@ -51,9 +51,9 @@ jobs:
           $env:PATH = "$qtBin;$env:PATH"
 
           # Find built binary
-          $exePath = "build/bin/Release/ShapefileViewer.exe"
+          $exePath = "build/bin/Release/ShpLightViewer.exe"
           if (-not (Test-Path $exePath)) {
-            $exePath = "build/Release/ShapefileViewer.exe"
+            $exePath = "build/Release/ShpLightViewer.exe"
           }
           $targetDir = Split-Path -Parent $exePath
           Write-Host "Deploying Qt dependencies for: $exePath into $targetDir"
@@ -67,7 +67,7 @@ jobs:
       - name: Upload Windows Installer Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ShapefileViewer-Windows-x64-Setup
+          name: ShpLightViewer-Windows-x64-Setup
           path: |
             build/*.exe
           if-no-files-found: error
