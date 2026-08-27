@@ -13,6 +13,7 @@ class TestSmoke : public QObject {
 private slots:
     void initTestCase() {
         qputenv("QT_TEST_OFFSCREEN", "1");
+        if (qApp) qApp->setProperty("QT_TEST_MODE", true);
         QVERIFY(m_tempDir.isValid());
     }
 

@@ -10,48 +10,58 @@ class QPushButton;
 class QProgressBar;
 
 namespace UI {
+
 class ShapeCanvas;
+class AttributeTableDialog;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
 
 public:
     explicit MainWindow(QWidget* parent = nullptr);
-    ~MainWindow() override;
+    ~MainWindow() override = default;
 
     void openShapefile(const QString& filePath);
+    bool isLoading() const { return m_loadWatcher.isRunning(); }
     ShapeCanvas* canvas() const { return m_canvas; }
-    bool isLoading() const { return m_isLoading; }
+    std::shared_ptr<Core::ShapeDataset> currentDataset() const { return m_currentDataset; }
+
+    void deleteFeature(int featureIndex);
+
+protected:
+    void keyPressEvent(QKeyEvent* event) override;
 
 private slots:
-    void onSelectFileClicked();
-    void onFitToWindowClicked();
+    void onOpenFileClicked();
+    void onFitWindowClicked();
+    void onOpenAttributesClicked();
+    void onDeleteSelectedClicked();
     void onAsyncLoadFinished();
-    void onMouseGeoPositionChanged(double x, double y);
-    void onZoomLevelChanged(double zoomRatio);
+    void onFeatureSelected(int featureIndex);
 
 private:
     void setupUi();
-    void updateFileInfoPanel(const Core::ShapeDataset* dataset);
+    void setupToolbar();
+    void setupStatusBar();
+    void updateLayerInfoDisplay();
 
 private:
     ShapeCanvas* m_canvas{nullptr};
+    AttributeTableDialog* m_attrDialog{nullptr};
 
     QPushButton* m_btnOpen{nullptr};
     QPushButton* m_btnFit{nullptr};
-    QProgressBar* m_loadingProgress{nullptr};
+    QPushButton* m_btnAttributes{nullptr};
+    QPushButton* m_btnDeleteSelected{nullptr};
 
-    QLabel* m_lblFileName{nullptr};
-    QLabel* m_lblType{nullptr};
-    QLabel* m_lblFeatureCount{nullptr};
-    QLabel* m_lblVertexCount{nullptr};
-
+    QLabel* m_lblLayerInfo{nullptr};
+    QLabel* m_lblCoordinates{nullptr};
+    QLabel* m_lblZoom{nullptr};
     QLabel* m_statusMsg{nullptr};
-    QLabel* m_statusCoords{nullptr};
-    QLabel* m_statusZoom{nullptr};
+    QProgressBar* m_progressBar{nullptr};
 
-    bool m_isLoading{false};
     QFutureWatcher<Core::LoadResult> m_loadWatcher;
+    std::shared_ptr<Core::ShapeDataset> m_currentDataset;
 };
 
 } // namespace UI

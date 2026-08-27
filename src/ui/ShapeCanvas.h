@@ -22,9 +22,14 @@ public:
     std::shared_ptr<Core::ShapeDataset> dataset() const { return m_dataset; }
     double currentZoomRatio() const;
 
+    int selectedFeatureIndex() const { return m_selectedFeatureIndex; }
+    void setSelectedFeatureIndex(int index);
+    void centerOnFeature(int index);
+
 signals:
     void mouseGeoPositionChanged(double geoX, double geoY);
     void zoomLevelChanged(double zoomRatio);
+    void featureSelected(int featureIndex);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -40,6 +45,7 @@ private:
     Core::ShapePoint screenToGeo(const QPointF& scr) const;
     Core::ShapeBoundingBox viewportGeoBoundingBox() const;
     void calculateBaseScale();
+    int pickFeatureAt(const QPointF& screenPos) const;
 
 private:
     std::shared_ptr<Core::ShapeDataset> m_dataset;
@@ -51,6 +57,9 @@ private:
 
     bool m_isDragging{false};
     QPoint m_lastMousePos;
+    QPoint m_pressPos;
+
+    int m_selectedFeatureIndex{-1};
 
     static constexpr double PADDING = 24.0;
     static constexpr double ZOOM_FACTOR = 1.2;

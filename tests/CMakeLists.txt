@@ -38,6 +38,7 @@ add_executable(test_smoke
     ${CMAKE_SOURCE_DIR}/src/core/ShapeData.cpp
     ${CMAKE_SOURCE_DIR}/src/core/ShapefileReader.cpp
     ${CMAKE_SOURCE_DIR}/src/ui/ShapeCanvas.cpp
+    ${CMAKE_SOURCE_DIR}/src/ui/AttributeTableDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/ui/MainWindow.cpp
 )
 target_link_libraries(test_smoke PRIVATE
@@ -47,3 +48,21 @@ target_link_libraries(test_smoke PRIVATE
     shapelib
 )
 add_test(NAME test_smoke COMMAND test_smoke)
+
+# Test 4: DBF Attribute Table & Feature Selection / Deletion
+add_executable(test_attributes
+    TestAttributes.cpp
+    TestDataGenerator.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/ShapeData.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/ShapefileReader.cpp
+    ${CMAKE_SOURCE_DIR}/src/ui/ShapeCanvas.cpp
+    ${CMAKE_SOURCE_DIR}/src/ui/AttributeTableDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/ui/MainWindow.cpp
+)
+target_link_libraries(test_attributes PRIVATE
+    Qt6::Widgets
+    Qt6::Concurrent
+    Qt6::Test
+    shapelib
+)
+add_test(NAME test_attributes COMMAND test_attributes)

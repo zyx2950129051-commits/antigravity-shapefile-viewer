@@ -73,6 +73,13 @@ enum class ShapeType {
 
 QString shapeTypeToString(ShapeType type);
 
+struct AttributeField {
+    QString name;
+    QString typeName;
+    int width{0};
+    int decimals{0};
+};
+
 struct ShapePart {
     std::vector<ShapePoint> points;
 };
@@ -82,6 +89,7 @@ struct ShapeFeature {
     ShapeType type{ShapeType::Unknown};
     std::vector<ShapePart> parts;
     ShapeBoundingBox bbox;
+    std::vector<QString> attributes;
 
     int totalVertices() const {
         int count = 0;
@@ -97,6 +105,8 @@ struct ShapeDataset {
     ShapeType primaryType{ShapeType::Unknown};
     ShapeBoundingBox bbox;
     std::vector<ShapeFeature> features;
+    std::vector<AttributeField> fields;
+    bool hasAttributes{false};
     int totalFeatureCount{0};
     int totalVertexCount{0};
 

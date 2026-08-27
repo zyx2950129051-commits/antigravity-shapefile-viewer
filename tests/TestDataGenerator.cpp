@@ -187,4 +187,38 @@ QString TestDataGenerator::createChinesePathShp(const QString& baseDir) {
     return QString();
 }
 
+bool TestDataGenerator::createPolygonWithDbfShp(const QString& filePath) {
+    if (!createPolygonShp(filePath)) {
+        return false;
+    }
+
+    QFileInfo info(filePath);
+    QString baseNoExt = info.absolutePath() + "/" + info.completeBaseName();
+    QString dbfPath = baseNoExt + ".dbf";
+
+    // Write .cpg file for UTF-8
+    QFile cpgFile(baseNoExt + ".cpg");
+    if (cpgFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        cpgFile.write("UTF-8");
+        cpgFile.close();
+    }
+
+    QByteArray utf8Dbf = QDir::toNativeSeparators(dbfPath).toUtf8();
+    DBFHandle hDBF = DBFCreate(utf8Dbf.constData());
+    if (!hDBF) return false;
+
+    // Add fields
+    int fName = DBFAddField(hDBF, "NAME", FTString, 32, 0);
+    int fArea = DBFAddField(hDBF, "AREA", FTDouble, 16, 2);
+    int fCode = DBFAddField(hDBF, "CODE", FTInteger, 8, 0);
+
+    // Record 0 (Polygon)
+    DBFWriteStringAttribute(hDBF, 0, fName, "地块A (测试)");
+    DBFWriteDoubleAttribute(hDBF, 0, fArea, 1250.75);
+    DBFWriteIntegerAttribute(hDBF, 0, fCode, 1001);
+
+    DBFClose(hDBF);
+    return true;
+}
+
 } // namespace TestUtils

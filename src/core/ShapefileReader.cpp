@@ -101,9 +101,105 @@ LoadResult ShapefileReader::load(const QString& filePath) {
         return result;
     }
 
+    // Check and open associated .dbf file
+    QString baseNoExt = fileInfo.absolutePath() + "/" + fileInfo.completeBaseName();
+    QString dbfPath = baseNoExt + ".dbf";
+    if (!QFile::exists(dbfPath)) {
+        dbfPath = baseNoExt + ".DBF";
+    }
+
+    // Check .cpg for encoding
+    QString cpgEncoding;
+    QString cpgPath = baseNoExt + ".cpg";
+    if (!QFile::exists(cpgPath)) {
+        cpgPath = baseNoExt + ".CPG";
+    }
+    if (QFile::exists(cpgPath)) {
+        QFile cpgFile(cpgPath);
+        if (cpgFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            cpgEncoding = QString::fromUtf8(cpgFile.readAll()).trimmed().toUpper();
+            cpgFile.close();
+        }
+    }
+
+    DBFHandle hDBF = nullptr;
+    if (QFile::exists(dbfPath)) {
+        QByteArray utf8Dbf = QDir::toNativeSeparators(dbfPath).toUtf8();
+#if defined(_WIN32) || defined(WIN32)
+        hDBF = DBFOpenLL(utf8Dbf.constData(), "rb", &sHooks);
+#else
+        hDBF = DBFOpen(utf8Dbf.constData(), "rb");
+#endif
+    }
+
+    auto decodeString = [&](const char* rawStr) -> QString {
+        if (!rawStr || *rawStr == '\0') return QString();
+        QByteArray bytes(rawStr);
+
+        if (cpgEncoding.contains(QStringLiteral("UTF-8")) || cpgEncoding.contains(QStringLiteral("UTF8"))) {
+            return QString::fromUtf8(bytes).trimmed();
+        }
+
+        // Try UTF-8 first
+        QString utf8Str = QString::fromUtf8(bytes);
+        if (!utf8Str.contains(QChar::ReplacementCharacter)) {
+            return utf8Str.trimmed();
+        }
+
+        // Fallback to local 8-bit string
+        return QString::fromLocal8Bit(bytes).trimmed();
+    };
+
     auto dataset = std::make_shared<ShapeDataset>();
     dataset->filePath = fileInfo.absoluteFilePath();
     dataset->primaryType = primaryType;
+
+    // Read DBF fields metadata
+    int nFields = 0;
+    int nRecords = 0;
+    if (hDBF) {
+        nFields = DBFGetFieldCount(hDBF);
+        nRecords = DBFGetRecordCount(hDBF);
+        dataset->fields.reserve(static_cast<size_t>(nFields));
+
+        for (int f = 0; f < nFields; ++f) {
+            char szFieldName[20] = {0};
+            int nWidth = 0;
+            int nDecimals = 0;
+            DBFFieldType fType = DBFGetFieldInfo(hDBF, f, szFieldName, &nWidth, &nDecimals);
+
+            AttributeField field;
+            field.name = decodeString(szFieldName);
+            if (field.name.isEmpty()) {
+                field.name = QStringLiteral("字段_%1").arg(f + 1);
+            }
+            field.width = nWidth;
+            field.decimals = nDecimals;
+
+            switch (fType) {
+                case FTString:
+                    field.typeName = QStringLiteral("文本 (String)");
+                    break;
+                case FTInteger:
+                    field.typeName = QStringLiteral("整数 (Integer)");
+                    break;
+                case FTDouble:
+                    field.typeName = QStringLiteral("浮点 (Double)");
+                    break;
+                case FTLogical:
+                    field.typeName = QStringLiteral("布尔 (Logical)");
+                    break;
+                case FTDate:
+                    field.typeName = QStringLiteral("日期 (Date)");
+                    break;
+                default:
+                    field.typeName = QStringLiteral("其他");
+                    break;
+            }
+            dataset->fields.push_back(std::move(field));
+        }
+        dataset->hasAttributes = (nFields > 0);
+    }
 
     dataset->features.reserve(static_cast<size_t>(nEntities));
     int totalVertices = 0;
@@ -129,6 +225,19 @@ LoadResult ShapefileReader::load(const QString& filePath) {
         ShapeFeature feat;
         feat.id = psObject->nShapeId >= 0 ? psObject->nShapeId : i;
         feat.type = featType;
+
+        // Read attributes for this feature
+        if (hDBF && i < nRecords) {
+            feat.attributes.reserve(static_cast<size_t>(nFields));
+            for (int f = 0; f < nFields; ++f) {
+                if (DBFIsAttributeNULL(hDBF, i, f)) {
+                    feat.attributes.push_back(QStringLiteral("-"));
+                } else {
+                    const char* valStr = DBFReadStringAttribute(hDBF, i, f);
+                    feat.attributes.push_back(decodeString(valStr));
+                }
+            }
+        }
 
         if (featType == ShapeType::Point) {
             ShapePart part;
@@ -183,6 +292,9 @@ LoadResult ShapefileReader::load(const QString& filePath) {
     }
 
     SHPClose(hSHP);
+    if (hDBF) {
+        DBFClose(hDBF);
+    }
 
     if (dataset->features.empty()) {
         result.errorMessage = QStringLiteral("文件中未发现任何有效的二维几何要素。");

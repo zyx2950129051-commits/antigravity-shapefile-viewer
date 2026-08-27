@@ -35,6 +35,8 @@ set(CORE_SOURCES
 set(UI_SOURCES
     src/ui/ShapeCanvas.h
     src/ui/ShapeCanvas.cpp
+    src/ui/AttributeTableDialog.h
+    src/ui/AttributeTableDialog.cpp
     src/ui/MainWindow.h
     src/ui/MainWindow.cpp
 )

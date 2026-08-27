@@ -4,6 +4,7 @@
 #include <QWheelEvent>
 #include <QMouseEvent>
 #include <QResizeEvent>
+#include <QKeyEvent>
 #include <algorithm>
 #include <cmath>
 
@@ -20,16 +21,19 @@ ShapeCanvas::ShapeCanvas(QWidget* parent)
 void ShapeCanvas::setDataset(std::shared_ptr<Core::ShapeDataset> dataset) {
     m_dataset = std::move(dataset);
     m_hasDataset = (m_dataset != nullptr && m_dataset->totalFeatureCount > 0);
+    m_selectedFeatureIndex = -1;
     fitToWindow();
 }
 
 void ShapeCanvas::clear() {
     m_dataset.reset();
     m_hasDataset = false;
+    m_selectedFeatureIndex = -1;
     m_panOffset = QPointF(0.0, 0.0);
     m_baseScale = 1.0;
     m_currentScale = 1.0;
     emit zoomLevelChanged(1.0);
+    emit featureSelected(-1);
     update();
 }
 
@@ -40,6 +44,34 @@ bool ShapeCanvas::hasData() const {
 double ShapeCanvas::currentZoomRatio() const {
     if (m_baseScale <= 1e-9) return 1.0;
     return m_currentScale / m_baseScale;
+}
+
+void ShapeCanvas::setSelectedFeatureIndex(int index) {
+    if (index >= 0 && hasData() && index < static_cast<int>(m_dataset->features.size())) {
+        m_selectedFeatureIndex = index;
+    } else {
+        m_selectedFeatureIndex = -1;
+    }
+    update();
+}
+
+void ShapeCanvas::centerOnFeature(int index) {
+    if (!hasData() || index < 0 || index >= static_cast<int>(m_dataset->features.size())) {
+        return;
+    }
+
+    const auto& feat = m_dataset->features[index];
+    if (!feat.bbox.isValid()) return;
+
+    Core::ShapePoint featCenter = feat.bbox.center();
+    Core::ShapePoint centerGeo = m_dataset->bbox.center();
+
+    // Adjust panOffset so featCenter is placed at canvas center (width/2, height/2)
+    m_panOffset.setX(-(featCenter.x - centerGeo.x) * m_currentScale);
+    m_panOffset.setY((featCenter.y - centerGeo.y) * m_currentScale);
+
+    m_selectedFeatureIndex = index;
+    update();
 }
 
 void ShapeCanvas::calculateBaseScale() {
@@ -105,6 +137,87 @@ Core::ShapeBoundingBox ShapeCanvas::viewportGeoBoundingBox() const {
     return box;
 }
 
+// Distance from point to line segment in screen pixels
+static double distanceToSegment(const QPointF& p, const QPointF& a, const QPointF& b) {
+    double l2 = (b.x() - a.x()) * (b.x() - a.x()) + (b.y() - a.y()) * (b.y() - a.y());
+    if (l2 == 0.0) return std::hypot(p.x() - a.x(), p.y() - a.y());
+
+    double t = ((p.x() - a.x()) * (b.x() - a.x()) + (p.y() - a.y()) * (b.y() - a.y())) / l2;
+    t = std::clamp(t, 0.0, 1.0);
+
+    QPointF projection(a.x() + t * (b.x() - a.x()), a.y() + t * (b.y() - a.y()));
+    return std::hypot(p.x() - projection.x(), p.y() - projection.y());
+}
+
+int ShapeCanvas::pickFeatureAt(const QPointF& screenPos) const {
+    if (!hasData()) return -1;
+
+    constexpr double tolerancePx = 6.0;
+    Core::ShapePoint mouseGeo = screenToGeo(screenPos);
+
+    // Expand bounding box by tolerance in geo coordinates
+    double geoTolerance = tolerancePx / m_currentScale;
+    Core::ShapeBoundingBox mouseBox;
+    mouseBox.minX = mouseGeo.x - geoTolerance;
+    mouseBox.maxX = mouseGeo.x + geoTolerance;
+    mouseBox.minY = mouseGeo.y - geoTolerance;
+    mouseBox.maxY = mouseGeo.y + geoTolerance;
+
+    int total = static_cast<int>(m_dataset->features.size());
+
+    // Iterate backwards to pick top-most rendered feature
+    for (int i = total - 1; i >= 0; --i) {
+        const auto& feat = m_dataset->features[i];
+        if (!feat.bbox.intersects(mouseBox)) continue;
+
+        switch (feat.type) {
+            case Core::ShapeType::Point:
+            case Core::ShapeType::MultiPoint: {
+                for (const auto& part : feat.parts) {
+                    for (const auto& pt : part.points) {
+                        QPointF scrPt = geoToScreen(pt);
+                        if (std::hypot(screenPos.x() - scrPt.x(), screenPos.y() - scrPt.y()) <= (tolerancePx + 4.0)) {
+                            return i;
+                        }
+                    }
+                }
+                break;
+            }
+            case Core::ShapeType::Polyline: {
+                for (const auto& part : feat.parts) {
+                    for (size_t v = 0; v + 1 < part.points.size(); ++v) {
+                        QPointF s1 = geoToScreen(part.points[v]);
+                        QPointF s2 = geoToScreen(part.points[v + 1]);
+                        if (distanceToSegment(screenPos, s1, s2) <= tolerancePx) {
+                            return i;
+                        }
+                    }
+                }
+                break;
+            }
+            case Core::ShapeType::Polygon: {
+                QPainterPath path;
+                path.setFillRule(Qt::OddEvenFill);
+                for (const auto& part : feat.parts) {
+                    if (part.points.size() < 3) continue;
+                    path.moveTo(geoToScreen(part.points[0]));
+                    for (size_t v = 1; v < part.points.size(); ++v) {
+                        path.lineTo(geoToScreen(part.points[v]));
+                    }
+                    path.closeSubpath();
+                }
+                if (path.contains(screenPos)) {
+                    return i;
+                }
+                break;
+            }
+            default:
+                break;
+        }
+    }
+    return -1;
+}
+
 void ShapeCanvas::paintEvent(QPaintEvent* /*event*/) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
@@ -149,7 +262,8 @@ void ShapeCanvas::paintEvent(QPaintEvent* /*event*/) {
     polyBorderPen.setCosmetic(true);
     QBrush polyFillBrush(QColor(33, 150, 243, 85));
 
-    for (const auto& feat : m_dataset->features) {
+    for (size_t idx = 0; idx < m_dataset->features.size(); ++idx) {
+        const auto& feat = m_dataset->features[idx];
         if (!feat.bbox.intersects(viewBBox)) {
             continue; // Skip out-of-screen features
         }
@@ -206,6 +320,64 @@ void ShapeCanvas::paintEvent(QPaintEvent* /*event*/) {
                 break;
         }
     }
+
+    // Highlight Selected Feature
+    if (m_selectedFeatureIndex >= 0 && m_selectedFeatureIndex < static_cast<int>(m_dataset->features.size())) {
+        const auto& selFeat = m_dataset->features[m_selectedFeatureIndex];
+
+        QPen highlightPen(QColor(255, 112, 67), 3.0); // Vibrant orange
+        highlightPen.setCosmetic(true);
+        QBrush highlightBrush(QColor(255, 171, 64, 130)); // Translucent amber fill
+
+        switch (selFeat.type) {
+            case Core::ShapeType::Point:
+            case Core::ShapeType::MultiPoint: {
+                painter.setPen(highlightPen);
+                painter.setBrush(highlightBrush);
+                constexpr double selRadius = 7.0;
+                for (const auto& part : selFeat.parts) {
+                    for (const auto& pt : part.points) {
+                        QPointF scrPt = geoToScreen(pt);
+                        painter.drawEllipse(scrPt, selRadius, selRadius);
+                    }
+                }
+                break;
+            }
+            case Core::ShapeType::Polyline: {
+                painter.setPen(highlightPen);
+                painter.setBrush(Qt::NoBrush);
+                for (const auto& part : selFeat.parts) {
+                    if (part.points.size() < 2) continue;
+                    QPolygonF poly;
+                    poly.reserve(static_cast<qsizetype>(part.points.size()));
+                    for (const auto& pt : part.points) {
+                        poly.append(geoToScreen(pt));
+                    }
+                    painter.drawPolyline(poly);
+                }
+                break;
+            }
+            case Core::ShapeType::Polygon: {
+                painter.setPen(highlightPen);
+                painter.setBrush(highlightBrush);
+
+                QPainterPath path;
+                path.setFillRule(Qt::OddEvenFill);
+                for (const auto& part : selFeat.parts) {
+                    if (part.points.size() < 3) continue;
+                    path.moveTo(geoToScreen(part.points[0]));
+                    for (size_t i = 1; i < part.points.size(); ++i) {
+                        path.lineTo(geoToScreen(part.points[i]));
+                    }
+                    path.closeSubpath();
+                }
+                painter.drawPath(path);
+                break;
+            }
+            default:
+                break;
+        }
+    }
 }
 
 void ShapeCanvas::wheelEvent(QWheelEvent* event) {
@@ -252,9 +424,9 @@ void ShapeCanvas::wheelEvent(QWheelEvent* event) {
 
 void ShapeCanvas::mousePressEvent(QMouseEvent* event) {
     if (event->button() == Qt::LeftButton) {
-        m_isDragging = true;
+        m_isDragging = false;
+        m_pressPos = event->pos();
         m_lastMousePos = event->pos();
-        setCursor(Qt::ClosedHandCursor);
         event->accept();
         return;
     }
@@ -262,11 +434,18 @@ void ShapeCanvas::mousePressEvent(QMouseEvent* event) {
 }
 
 void ShapeCanvas::mouseMoveEvent(QMouseEvent* event) {
-    if (m_isDragging) {
-        QPoint delta = event->pos() - m_lastMousePos;
-        m_lastMousePos = event->pos();
-        m_panOffset += QPointF(delta.x(), delta.y());
-        update();
+    if (event->buttons() & Qt::LeftButton) {
+        if (!m_isDragging && (event->pos() - m_pressPos).manhattanLength() > 4) {
+            m_isDragging = true;
+            setCursor(Qt::ClosedHandCursor);
+        }
+
+        if (m_isDragging) {
+            QPoint delta = event->pos() - m_lastMousePos;
+            m_lastMousePos = event->pos();
+            m_panOffset += QPointF(delta.x(), delta.y());
+            update();
+        }
     } else {
         if (hasData()) {
             setCursor(Qt::CrossCursor);
@@ -284,12 +463,15 @@ void ShapeCanvas::mouseMoveEvent(QMouseEvent* event) {
 }
 
 void ShapeCanvas::mouseReleaseEvent(QMouseEvent* event) {
-    if (event->button() == Qt::LeftButton && m_isDragging) {
-        m_isDragging = false;
-        if (hasData()) {
-            setCursor(Qt::CrossCursor);
+    if (event->button() == Qt::LeftButton) {
+        if (m_isDragging) {
+            m_isDragging = false;
+            setCursor(hasData() ? Qt::CrossCursor : Qt::ArrowCursor);
         } else {
-            setCursor(Qt::ArrowCursor);
+            // Click pick action
+            int picked = pickFeatureAt(event->position());
+            setSelectedFeatureIndex(picked);
+            emit featureSelected(picked);
         }
         event->accept();
         return;
@@ -306,7 +488,6 @@ void ShapeCanvas::leaveEvent(QEvent* /*event*/) {
 void ShapeCanvas::resizeEvent(QResizeEvent* /*event*/) {
     if (hasData()) {
         calculateBaseScale();
-        // Maintain current zoom scale relative to base
         emit zoomLevelChanged(currentZoomRatio());
         update();
     }

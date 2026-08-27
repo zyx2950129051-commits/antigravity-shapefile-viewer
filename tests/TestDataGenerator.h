@@ -15,6 +15,7 @@ public:
     static bool createNullShapeShp(const QString& filePath);
     static bool createMultiPatchShp(const QString& filePath);
     static QString createChinesePathShp(const QString& baseDir);
+    static bool createPolygonWithDbfShp(const QString& filePath);
 };
 
 } // namespace TestUtils
