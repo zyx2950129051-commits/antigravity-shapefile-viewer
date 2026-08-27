@@ -1,0 +1,73 @@
+name: Build Windows Installer (NSIS)
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Setup MSVC Developer Command Prompt
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install Qt 6.8.2
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.2'
+          arch: 'win64_msvc2022_64'
+          cache: true
+
+      - name: Configure CMake
+        run: |
+          cmake -B build -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_PREFIX_PATH="${{ env.Qt6_DIR }}"
+
+      - name: Build Solution
+        run: |
+          cmake --build build --config Release --parallel
+
+      - name: Run CTest Unit Tests
+        run: |
+          $qtBin = "${{ env.Qt6_DIR }}/bin"
+          $env:PATH = "$qtBin;$env:PATH"
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $env:QT_TEST_OFFSCREEN = "1"
+          ctest --test-dir build -C Release --output-on-failure --timeout 45
+
+      - name: Deploy Qt Dependencies and Create Installer
+        run: |
+          $qtBin = "${{ env.Qt6_DIR }}/bin"
+          $env:PATH = "$qtBin;$env:PATH"
+
+          # Find built binary
+          $exePath = "build/bin/Release/ShapefileViewer.exe"
+          if (-not (Test-Path $exePath)) {
+            $exePath = "build/Release/ShapefileViewer.exe"
+          }
+          $targetDir = Split-Path -Parent $exePath
+          Write-Host "Deploying Qt dependencies for: $exePath into $targetDir"
+          windeployqt --release --no-translations --compiler-runtime --dir "$targetDir" "$exePath"
+
+          # Run CPack to generate self-contained NSIS Installer
+          cd build
+          cpack -G NSIS -C Release
+          Get-ChildItem -Path . -Filter "*.exe" | ForEach-Object { Write-Host "Generated installer: $($_.FullName) (Size: $($_.Length) bytes)" }
+
+      - name: Upload Windows Installer Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ShapefileViewer-Windows-x64-Setup
+          path: |
+            build/*.exe
+          if-no-files-found: error
