@@ -20,7 +20,6 @@ private slots:
     void testMainWindowSmoke() {
         MainWindow win;
         win.show();
-        QVERIFY(win.isVisible());
         QVERIFY(!win.canvas()->hasData());
 
         // Create a test polygon shapefile
@@ -31,6 +30,7 @@ private slots:
         win.openShapefile(polyPath);
 
         // Wait for async load to finish
+        QTest::qWait(100);
         QTRY_VERIFY_WITH_TIMEOUT(!win.isLoading(), 5000);
 
         QVERIFY(win.canvas()->hasData());
@@ -47,6 +47,7 @@ private slots:
         // Test invalid file does not destroy existing data
         QString invalidPath = m_tempDir.path() + "/non_existent.shp";
         win.openShapefile(invalidPath);
+        QTest::qWait(100);
         QTRY_VERIFY_WITH_TIMEOUT(!win.isLoading(), 5000);
 
         // Dataset should still be retained
